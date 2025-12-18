@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frostbound Run</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;700&display=swap');
+
+        :root {
+            --bg-color: #0B1D3A;
+            --primary-accent: #2EC4B6;
+            --secondary-accent: #FFD166;
+            --text-color: #FFFFFF;
+            --button-text: #072B2A;
+            --canvas-width: 900px;
+            --canvas-height: 500px;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #050E1B;
+            font-family: 'Outfit', sans-serif;
+            color: var(--text-color);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 4px solid #163A63;
+        }
+
+        canvas {
+            display: block;
+            background-color: var(--bg-color);
+            cursor: pointer;
+        }
+
+        /* Prevent default touch actions on touch devices */
+        canvas {
+            touch-action: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="900" height="500"></canvas>
+    </div>
+
+    <script>
+        /**
+         * Frostbound Run
+         * A premium 2D endless runner built for Gemini-3-Flash.
+         */
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- Configuration & Constants ---
+        const WIDTH = 900;
+        const HEIGHT = 500;
+        const GROUND_Y = 410;
+        const GRAVITY = 2200;
+        const JUMP_VELOCITY = -780;
+        const SCROLL_SPEED = 360;
+        const MAX_FALL_SPEED = 1200;
+        const JUMP_BUFFER_TIME = 0.12;
+        const COYOTE_TIME = 0.10;
+        const JUMP_COOLDOWN = 0.05;
+
+        const PLAYER_HITBOX_W = 44;
+        const PLAYER_HITBOX_H = 58;
+        const PLAYER_COLLISION_SHRINK = 4;
+
+        const SPAWN_INTERVAL = 1350;
+        const INITIAL_SPAWN_DELAY = 1000;
+        const MIN_OBSTACLE_SPACING = 260;
+
+        const COLORS = {
+            sky: '#0B1D3A',
+            haze: '#163A63',
+            ground: '#EAF7FF',
+            groundShadow: '#CFE8F6',
+            player: '#F5FBFF',
+            playerOutline: '#CFE8F6',
+            playerDetail: '#1F2A33',
+            playerNose: '#F28C28',
+            iceBlock: '#8AD3FF',
+            iceHighlight: '#CFF1FF',
+            uiText: '#FFFFFF',
+            uiHighlight: '#FFD166',
+            btnBg: '#2EC4B6',
+            btnText: '#072B2A',
+            snowDriftFar: '#163A63',
+            snowDriftNear: '#0F2A4C'
+        };
+
+        const STATES = {
+            MENU: 'MENU',
+            PLAYING: 'PLAYING',
+            PAUSED: 'PAUSED',
+            GAMEOVER: 'GAMEOVER'
+        };
+
+        // --- Game State ---
+        let currentState = STATES.MENU;
+        let score = 0;
+        let bestScore = parseInt(localStorage.getItem('frostboundRun_bestScore')) || 0;
+        let lastTime = 0;
+        let spawnTimer = 0;
+        let gameTime = 0;
+        let scoreFlashTimer = 0;
+        let screenShakeTimer = 0;
+
+        // --- Input State ---
+        const keys = {};
+        let jumpBuffered = false;
+        let jumpBufferTimer = 0;
+        let lastJumpTime = 0;
+
+        // --- Objects ---
+        let player = {
+            x: 140,
+            y: GROUND_Y - PLAYER_HITBOX_H,
+            vy: 0,
+            isGrounded: true,
+            lastGroundedTime: 0,
+            jumpScale: 1.0,
+            jumpScaleTimer: 0
+        };
+
+        let obstacles = [];
+        let snowParticles = [];
+        let parallaxLayers = [
+            { x: 0, speed: 60, drifts: [] }, // Far
+            { x: 0, speed: 120, drifts: [] } // Near
+        ];
+
+        // Initialize parallax drifts
+        function initParallax() {
+            parallaxLayers.forEach((layer, i) => {
+                for (let x = 0; x < WIDTH + 400; x += 300) {
+                    layer.drifts.push({
+                        x: x + Math.random() * 100,
+                        width: 200 + Math.random() * 200,
+                        height: 40 + Math.random() * 60
+                    });
+                }
+            });
+        }
+
+        // Initialize snow particles
+        function initSnow() {
+            for (let i = 0; i < 40; i++) {
+                snowParticles.push({
+                    x: Math.random() * WIDTH,
+                    y: Math.random() * HEIGHT,
+                    length: 5 + Math.random() * 10,
+                    speed: 140
+                });
+            }
+        }
+
+        initParallax();
+        initSnow();
+
+        // --- Controls ---
+        function handleKeyDown(e) {
+            if (e.repeat) return;
+            keys[e.code] = true;
+
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                e.preventDefault();
+                triggerJump();
+            }
+
+            if (e.code === 'KeyP' || e.code === 'Escape') {
+                togglePause();
+            }
+        }
+
+        function handleKeyUp(e) {
+            keys[e.code] = false;
+        }
+
+        function handleInputStart(e) {
+            triggerJump();
+        }
+
+        function triggerJump() {
+            if (currentState === STATES.MENU) {
+                startGame();
+                return;
+            }
+            if (currentState === STATES.GAMEOVER) {
+                startGame();
+                return;
+            }
+            if (currentState === STATES.PLAYING) {
+                jumpBuffered = true;
+                jumpBufferTimer = JUMP_BUFFER_TIME;
+            }
+        }
+
+        function togglePause() {
+            if (currentState === STATES.PLAYING) {
+                currentState = STATES.PAUSED;
+            } else if (currentState === STATES.PAUSED) {
+                currentState = STATES.PLAYING;
+                lastTime = performance.now(); // Reset lastTime to avoid jump in DT
+            }
+        }
+
+        function startGame() {
+            currentState = STATES.PLAYING;
+            score = 0;
+            gameTime = 0;
+            spawnTimer = INITIAL_SPAWN_DELAY;
+            obstacles = [];
+            player.y = GROUND_Y - PLAYER_HITBOX_H;
+            player.vy = 0;
+            player.isGrounded = true;
+            player.jumpScale = 1.0;
+            lastTime = performance.now();
+        }
+
+        // --- Core Logic ---
+        function update(dt) {
+            if (currentState !== STATES.PLAYING) return;
+
+            gameTime += dt;
+            score += dt * 10; // 10 points per second
+
+            // Update score flash
+            if (scoreFlashTimer > 0) scoreFlashTimer -= dt;
+
+            // Update screen shake
+            if (screenShakeTimer > 0) screenShakeTimer -= dt;
+
+            // Player Physics
+            updatePlayer(dt);
+
+            // Obstacles
+            updateObstacles(dt);
+
+            // Parallax & Snow
+            updateEnvironment(dt);
+
+            // Spawning
+            spawnTimer -= dt * 1000;
+            if (spawnTimer <= 0) {
+                spawnObstacle();
+                spawnTimer = SPAWN_INTERVAL;
+            }
+        }
+
+        function updatePlayer(dt) {
+            // Jump Buffering & Coyote Time
+            if (jumpBufferTimer > 0) jumpBufferTimer -= dt;
+            if (player.isGrounded) player.lastGroundedTime = gameTime;
+
+            const canJump = (player.isGrounded || (gameTime - player.lastGroundedTime < COYOTE_TIME)) &&
+                (gameTime - lastJumpTime > JUMP_COOLDOWN);
+
+            if (jumpBuffered && jumpBufferTimer > 0 && canJump) {
+                player.vy = JUMP_VELOCITY;
+                player.isGrounded = false;
+                player.jumpScale = 1.08;
+                player.jumpScaleTimer = 0.18;
+                lastJumpTime = gameTime;
+                jumpBuffered = false;
+            }
+
+            // Apply Gravity
+            player.vy += GRAVITY * dt;
+            if (player.vy > MAX_FALL_SPEED) player.vy = MAX_FALL_SPEED;
+
+            player.y += player.vy * dt;
+
+            // Ground Collision
+            if (player.y + PLAYER_HITBOX_H >= GROUND_Y) {
+                player.y = GROUND_Y - PLAYER_HITBOX_H;
+                player.vy = 0;
+                player.isGrounded = true;
+            }
+
+            // Jump Scaling Animation
+            if (player.jumpScaleTimer > 0) {
+                player.jumpScaleTimer -= dt;
+                player.jumpScale = 1.0 + (0.08 * (player.jumpScaleTimer / 0.18));
+            } else {
+                player.jumpScale = 1.0;
+            }
+        }
+
+        function spawnObstacle() {
+            // Safety rule: spacing
+            const lastObstacle = obstacles[obstacles.length - 1];
+            if (lastObstacle && lastObstacle.x > 680) {
+                spawnTimer = 50; // Check again soon
+                return;
+            }
+
+            const type = Math.random() < 0.6 ? 'ICE' : 'SNOWBALL';
+            if (type === 'ICE') {
+                obstacles.push({
+                    type: 'ICE',
+                    x: 940,
+                    y: GROUND_Y - 56,
+                    w: 46,
+                    h: 56,
+                    speed: 360,
+                    passed: false
+                });
+            } else {
+                obstacles.push({
+                    type: 'SNOWBALL',
+                    x: 940,
+                    y: GROUND_Y - 44,
+                    w: 44,
+                    h: 44, // Hitbox height
+                    radius: 22,
+                    speed: 420,
+                    passed: false,
+                    rotation: 0
+                });
+            }
+        }
+
+        function updateObstacles(dt) {
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                const obs = obstacles[i];
+                obs.x -= obs.speed * dt;
+
+                if (obs.type === 'SNOWBALL') {
+                    obs.rotation += obs.speed * dt * 0.1;
+                }
+
+                // Scoring for passing
+                if (!obs.passed && obs.x + obs.w < player.x) {
+                    obs.passed = true;
+                    score += 25;
+                    scoreFlashTimer = 0.12;
+                }
+
+                // Collision
+                if (checkCollision(player, obs)) {
+                    gameOver();
+                }
+
+                // Despawn
+                if (obs.x < -100) {
+                    obstacles.splice(i, 1);
+                }
+            }
+        }
+
+        function checkCollision(p, o) {
+            const pBox = {
+                x: p.x + PLAYER_COLLISION_SHRINK,
+                y: p.y + PLAYER_COLLISION_SHRINK,
+                w: PLAYER_HITBOX_W - PLAYER_COLLISION_SHRINK * 2,
+                h: PLAYER_HITBOX_H - PLAYER_COLLISION_SHRINK * 2
+            };
+
+            const oBox = {
+                x: o.x + 3,
+                y: o.y + 3,
+                w: o.w - 6,
+                h: o.h - 6
+            };
+
+            return pBox.x < oBox.x + oBox.w &&
+                pBox.x + pBox.w > oBox.x &&
+                pBox.y < oBox.y + oBox.h &&
+                pBox.y + pBox.h > oBox.y;
+        }
+
+        function updateEnvironment(dt) {
+            parallaxLayers.forEach(layer => {
+                layer.x -= layer.speed * dt;
+                if (layer.x < -WIDTH) layer.x += WIDTH;
+
+                layer.drifts.forEach(drift => {
+                    drift.x -= layer.speed * dt;
+                    if (drift.x + drift.width < -100) {
+                        drift.x += WIDTH + 300;
+                    }
+                });
+            });
+
+            snowParticles.forEach(p => {
+                p.y += p.speed * dt;
+                if (p.y > HEIGHT) {
+                    p.y = -p.length;
+                    p.x = Math.random() * WIDTH;
+                }
+            });
+        }
+
+        function gameOver() {
+            currentState = STATES.GAMEOVER;
+            screenShakeTimer = 0.20;
+            if (Math.floor(score) > bestScore) {
+                bestScore = Math.floor(score);
+                localStorage.setItem('frostboundRun_bestScore', bestScore);
+            }
+        }
+
+        // --- Rendering ---
+        function draw() {
+            ctx.save();
+
+            // Screen Shake
+            if (screenShakeTimer > 0) {
+                const mag = 8 * (screenShakeTimer / 0.20);
+                ctx.translate((Math.random() - 0.5) * mag, (Math.random() - 0.5) * mag);
+            }
+
+            drawBackground();
+
+            if (currentState === STATES.MENU) {
+                drawMenu();
+            } else {
+                drawGameContent();
+                if (currentState === STATES.PAUSED) drawPausedOverlay();
+                if (currentState === STATES.GAMEOVER) drawGameOverOverlay();
+            }
+
+            ctx.restore();
+        }
+
+        function drawBackground() {
+            // Sky
+            ctx.fillStyle = COLORS.sky;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Haze/Depth
+            ctx.fillStyle = COLORS.haze;
+            ctx.globalAlpha = 0.3;
+            ctx.beginPath();
+            ctx.moveTo(0, 300);
+            ctx.quadraticCurveTo(450, 250, WIDTH, 320);
+            ctx.lineTo(WIDTH, GROUND_Y);
+            ctx.lineTo(0, GROUND_Y);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+
+            // Parallax Drifts
+            parallaxLayers.forEach((layer, i) => {
+                ctx.fillStyle = i === 0 ? COLORS.snowDriftFar : COLORS.snowDriftNear;
+                layer.drifts.forEach(drift => {
+                    ctx.beginPath();
+                    ctx.ellipse(drift.x + drift.width / 2, GROUND_Y, drift.width / 2, drift.height, 0, Math.PI, 0);
+                    ctx.fill();
+                });
+            });
+
+            // Ground
+            ctx.fillStyle = COLORS.ground;
+            ctx.fillRect(0, GROUND_Y, WIDTH, HEIGHT - GROUND_Y);
+
+            // Ground Shadow Band
+            ctx.fillStyle = COLORS.groundShadow;
+            ctx.fillRect(0, GROUND_Y, WIDTH, 10);
+
+            // Snow falling
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.globalAlpha = 0.35;
+            ctx.lineWidth = 2;
+            snowParticles.forEach(p => {
+                ctx.beginPath();
+                ctx.moveTo(p.x, p.y);
+                ctx.lineTo(p.x, p.y + p.length);
+                ctx.stroke();
+            });
+            ctx.globalAlpha = 1.0;
+        }
+
+        function drawGameContent() {
+            // Score
+            ctx.fillStyle = scoreFlashTimer > 0 ? COLORS.uiHighlight : COLORS.uiText;
+            ctx.font = '700 24px Outfit';
+            ctx.textAlign = 'left';
+            ctx.fillText(`SCORE: ${Math.floor(score)}`, 20, 34);
+
+            // Best
+            ctx.fillStyle = COLORS.uiText;
+            ctx.textAlign = 'right';
+            ctx.fillText(`BEST: ${bestScore}`, 880, 34);
+
+            // Hint
+            if (currentState === STATES.PLAYING) {
+                ctx.textAlign = 'center';
+                ctx.font = '400 18px Outfit';
+                ctx.globalAlpha = 0.8;
+                ctx.fillText('SPACE/↑/TAP: JUMP   P/ESC: PAUSE', WIDTH / 2, 485);
+                ctx.globalAlpha = 1.0;
+            }
+
+            // Obstacles
+            obstacles.forEach(obs => {
+                if (obs.type === 'ICE') {
+                    // Main Block
+                    ctx.fillStyle = COLORS.iceBlock;
+                    ctx.roundRect(obs.x, obs.y, obs.w, obs.h, 4);
+                    ctx.fill();
+                    // Highlight
+                    ctx.fillStyle = COLORS.iceHighlight;
+                    ctx.fillRect(obs.x + 2, obs.y + 2, obs.w - 4, 8);
+                } else {
+                    ctx.save();
+                    ctx.translate(obs.x + obs.radius, obs.y + obs.radius);
+                    ctx.rotate(obs.rotation);
+
+                    ctx.fillStyle = COLORS.ground;
+                    ctx.strokeStyle = COLORS.playerOutline;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Texture on snowball
+                    ctx.fillStyle = COLORS.playerOutline;
+                    ctx.beginPath();
+                    ctx.arc(-8, -4, 3, 0, Math.PI * 2);
+                    ctx.arc(6, 8, 4, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+            });
+
+            // Player (Snowman)
+            drawPlayer();
+        }
+
+        function drawPlayer() {
+            ctx.save();
+            ctx.translate(player.x + PLAYER_HITBOX_W / 2, player.y + PLAYER_HITBOX_H);
+            ctx.scale(player.jumpScale, player.jumpScale);
+            ctx.translate(-(player.x + PLAYER_HITBOX_W / 2), -(player.y + PLAYER_HITBOX_H));
+
+            // Bottom ball (R=26)
+            const bx = player.x + 22;
+            const by = player.y + 36;
+            ctx.fillStyle = COLORS.player;
+            ctx.strokeStyle = COLORS.playerOutline;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(bx, by, 26, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            // Top ball (R=20)
+            const tx = player.x + 22;
+            const ty = player.y + 15;
+            ctx.beginPath();
+            ctx.arc(tx, ty, 20, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            // Buttons
+            ctx.fillStyle = COLORS.playerDetail;
+            ctx.beginPath();
+            ctx.arc(bx, by - 6, 3, 0, Math.PI * 2);
+            ctx.arc(bx, by + 6, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Eyes
+            ctx.beginPath();
+            ctx.arc(tx + 6, ty - 4, 2.5, 0, Math.PI * 2);
+            ctx.arc(tx + 14, ty - 4, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Nose
+            ctx.fillStyle = COLORS.playerNose;
+            ctx.beginPath();
+            ctx.moveTo(tx + 12, ty + 2);
+            ctx.lineTo(tx + 24, ty + 4);
+            ctx.lineTo(tx + 12, ty + 6);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function drawMenu() {
+            // Title
+            ctx.textAlign = 'center';
+            ctx.fillStyle = COLORS.uiText;
+            ctx.font = '700 56px Outfit';
+            ctx.fillText('FROSTBOUND RUN', WIDTH / 2, 120);
+
+            ctx.font = '400 22px Outfit';
+            ctx.globalAlpha = 0.8;
+            ctx.fillText('Jump over obstacles. Survive as long as you can.', WIDTH / 2, 165);
+            ctx.globalAlpha = 1.0;
+
+            // Controls
+            const cx = WIDTH / 2;
+            ctx.font = '700 20px Outfit';
+            ctx.fillText('CONTROLS', cx, 210);
+            ctx.font = '400 18px Outfit';
+            ctx.fillText('SPACE / ↑ / TAP : JUMP', cx, 235);
+            ctx.fillText('P or ESC : PAUSE', cx, 260);
+
+            // Button
+            drawButton('PLAY', WIDTH / 2, 300);
+
+            // Best
+            ctx.font = '700 20px Outfit';
+            ctx.fillStyle = COLORS.uiText;
+            ctx.fillText(`BEST SCORE: ${bestScore}`, WIDTH / 2, 360);
+        }
+
+        function drawButton(label, x, y) {
+            const w = 220;
+            const h = 56;
+            const bx = x - w / 2;
+            const by = y - h / 2;
+
+            ctx.fillStyle = COLORS.btnBg;
+            ctx.beginPath();
+            if (ctx.roundRect) {
+                ctx.roundRect(bx, by, w, h, 8);
+            } else {
+                ctx.rect(bx, by, w, h);
+            }
+            ctx.fill();
+
+            ctx.fillStyle = COLORS.btnText;
+            ctx.font = '700 22px Outfit';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, x, y);
+            ctx.textBaseline = 'alphabetic';
+        }
+
+        function drawPausedOverlay() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            ctx.fillStyle = COLORS.uiText;
+            ctx.textAlign = 'center';
+            ctx.font = '700 48px Outfit';
+            ctx.fillText('PAUSED', WIDTH / 2, 220);
+            ctx.font = '400 22px Outfit';
+            ctx.fillText('Press P or ESC to resume', WIDTH / 2, 260);
+        }
+
+        function drawGameOverOverlay() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            ctx.fillStyle = COLORS.uiText;
+            ctx.textAlign = 'center';
+            ctx.font = '700 48px Outfit';
+            ctx.fillText('GAME OVER', WIDTH / 2, 190);
+
+            ctx.font = '400 24px Outfit';
+            ctx.fillText(`SCORE: ${Math.floor(score)}`, WIDTH / 2, 240);
+            ctx.font = '700 24px Outfit';
+            ctx.fillText(`BEST: ${bestScore}`, WIDTH / 2, 275);
+
+            drawButton('RETRY', WIDTH / 2, 320);
+
+            ctx.font = '400 18px Outfit';
+            ctx.fillText('SPACE or TAP to retry', WIDTH / 2, 385);
+        }
+
+        // --- Loop ---
+        function loop(time) {
+            const dt = Math.min((time - lastTime) / 1000, 0.1); // Cap DT to avoid huge jumps
+            lastTime = time;
+
+            update(dt);
+            draw();
+
+            requestAnimationFrame(loop);
+        }
+
+        // --- Initialization ---
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        canvas.addEventListener('mousedown', handleInputStart);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleInputStart(e);
+        });
+
+        // Start
+        requestAnimationFrame((time) => {
+            lastTime = time;
+            requestAnimationFrame(loop);
+        });
+
+    </script>
+
+</body>
+
+</html>

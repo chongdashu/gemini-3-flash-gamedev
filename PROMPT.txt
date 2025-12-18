@@ -1,0 +1,1 @@
+An endless runner where you are a snowman avoiding obstacles in a wintery environment
