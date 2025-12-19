@@ -1,0 +1,1 @@
+a 3d arcade game where you play as a snowman shooting snowballs at incoming hordes of snow themed enemies in 4 directions (up down left right) in increasingly difficult waves. you can click/tap in the general direction or use keyboard. 

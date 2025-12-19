@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frosty Dash | Endless Winter Runner</title>
+    <meta name="description" content="Help the snowman dodge obstacles in this beautiful, endless winter adventure!">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="ui-overlay">
+            <div id="start-screen" class="overlay-modal">
+                <h1 class="game-title">FROSTY DASH</h1>
+                <p class="game-subtitle">Avoid the obstacles, keep on rolling!</p>
+                <button id="start-button" class="btn-primary">START SPRINT</button>
+                <div class="controls-hint">
+                    <span>Jump: <strong>Space</strong> or <strong>Click</strong></span>
+                </div>
+            </div>
+
+            <div id="game-hud" class="hidden">
+                <div class="score-container">
+                    <span class="label">DISTANCE</span>
+                    <span id="score-value">0m</span>
+                </div>
+                <div class="high-score-container">
+                    <span class="label">BEST</span>
+                    <span id="high-score-value">0m</span>
+                </div>
+            </div>
+
+            <div id="game-over-screen" class="overlay-modal hidden">
+                <h2 class="status-text">MELTED!</h2>
+                <div class="final-stats">
+                    <div class="stat-item">
+                        <span class="label">DISTANCE</span>
+                        <span id="final-score">0m</span>
+                    </div>
+                </div>
+                <button id="restart-button" class="btn-primary">TRY AGAIN</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
